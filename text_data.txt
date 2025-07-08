@@ -1,0 +1,30 @@
+# Test Data File Format:
+# test_type|description|data|rows|cols|scalar_value
+# test_type: 1=Matrix, 2=Integral, 3=String
+# For strings: scalar_value indicates string type (1=str,2=char,3=float,4=double,5=long,6=int)
+
+# Matrix Tests
+1|Teste Matriz 3x3 Aleatoria|RANDOM|3|3|2.5
+1|Teste Matriz 2x2 com Dados|1 2 3 4|2|2|3.0
+1|Teste Matriz 4x4 Identidade|1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1|4|4|1.0
+
+# String Tests
+3|Teste String Simples|Hello World|0|0|1
+3|Teste Char|A|0|0|2
+3|Teste Float|3.14159|0|0|3
+3|Teste Double|2.718281828|0|0|4
+3|Teste Long|123456789|0|0|5
+3|Teste Int|42|0|0|6
+
+# More Matrix Tests
+1|Matriz Pequena 2x2|10 20 30 40|2|2|5.0
+1|Matriz Grande Aleatoria|RANDOM|5|5|0.5
+
+# More String Tests
+3|Teste String Longa|Esta_eh_uma_string_muito_longa_para_testar|0|0|1
+3|Teste Float Negativo|-123.456|0|0|3
+3|Teste Int Negativo|-999|0|0|6
+
+# Integral Tests (placeholder)
+2|Teste Integral Basico|x^2|0|0|1.0
+2|Teste Integral Complexo|sin(x)*cos(x)|0|0|2.0
