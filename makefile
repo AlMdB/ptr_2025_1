@@ -34,19 +34,23 @@ endif
 
 
 BIN_DIR := bin
-INC_DIR := inc
-LIB_DIR := lib
-OBJ_DIR := obj
+DATA_DIR := data
 SRC_DIR := src
+CORE_DIR := $(SRC_DIR)/core
+UTILS_DIR := $(SRC_DIR)/utils
+INC_DIR := $(SRC_DIR)/include
+OBJ_DIR := obj
 
-EXE := $(BIN_DIR)/$(PRJ_DIR)$(EXE_EXT)
-SRC := $(wildcard $(SRC_DIR)/*.c)
+EXE := $(BIN_DIR)/robot_simulation$(EXE_EXT)
+
+SRC := $(wildcard $(CORE_DIR)/*.c) $(wildcard $(UTILS_DIR)/*.c)
 OBJ := $(patsubst $(SRC_DIR)/%.c, $(OBJ_DIR)/%.o, $(SRC))
 
+
 CC       := gcc                                     # C Compiler
-CPPFLAGS := -I. -I$(SRC_DIR) -I$(INC_DIR) -MMD -MP	# C Pre-Processor flags
+CPPFLAGS := -I$(INC_DIR) -MMD -MP					# C Pre-Processor flags
 CFLAGS   := -Wall -Wextra -O2 -std=gnu2x -g3	    # C compiler flags
-LDFLAGS  := -L$(LIB_DIR)				            # C linker flags
+LDFLAGS  :=			            					# C linker flags
 LDLIBS   := -lm	-pthread				            # Libs need
 
 ifeq ($(detected_OS),Windows)
@@ -59,10 +63,12 @@ vars:
 	@echo " "
 	@echo "PRJ_DIR = $(PRJ_DIR)"
 	@echo "BIN_DIR = $(BIN_DIR)"
+	@echo "DATA_DIR = $(DATA_DIR)"
+	@echo "CORE_DIR = $(CORE_DIR)"
+	@echo "UTILS_DIR = $(UTILS_DIR)"
 	@echo "INC_DIR = $(INC_DIR)"
 	@echo "LIB_DIR = $(LIB_DIR)"
 	@echo "OBJ_DIR = $(OBJ_DIR)"
-	@echo "SRC_DIR = $(SRC_DIR)"
 	@echo " "
 	@echo "EXE = $(EXE)"
 	@echo "SRC = $(SRC)"
@@ -85,8 +91,18 @@ else
 	$(MKDIR) $@
 endif
 
+$(OBJ_DIR)/core/%.o: $(CORE_DIR)/%.c | $(OBJ_DIR)/core
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+
+$(OBJ_DIR)/utils/%.o: $(UTILS_DIR)/%.c | $(OBJ_DIR)/utils
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c | $(OBJ_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(OBJ_DIR)/core $(OBJ_DIR)/utils:
+	$(MKDIR) $@
 
 .PHONY: all clean vars help
 
@@ -98,6 +114,7 @@ ifeq ($(detected_OS),Windows)
 else
 	-$(RM) $(EXE)
 	-$(RMDIR) $(OBJ_DIR)
+	-$(RM) $(DATA_DIR)/*.txt
 endif
 
 help:
