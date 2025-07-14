@@ -186,7 +186,7 @@ Matrix* identity_matrix(unsigned int rows, unsigned int cols){
 
 Matrix* inverse_Matrix(const Matrix* mtx) {
     if (mtx->rows != mtx->cols) {
-        printf("\nTamanho errado para inverter.\n");
+       //printf("\nTamanho errado para inverter.\n");
         return NULL;
     }
     Matrix* identity = identity_matrix(mtx->rows,mtx->cols);
@@ -201,7 +201,7 @@ Matrix* inverse_Matrix(const Matrix* mtx) {
         double pivot = get_val(copy,i,i);
 
         if (fabs(pivot) < 1e-10) {
-            printf("\n nao inverti vel.\n");
+            //printf("\n nao inverti vel.\n");
             delete_Matrix(copy);
             delete_Matrix(identity);
             return NULL;
@@ -228,7 +228,7 @@ Matrix* inverse_Matrix(const Matrix* mtx) {
 
 double determinant_Matrix(const Matrix* mtx) {
     if (mtx->rows != mtx->cols) {
-        printf("\nTamanhos incorretos para determinante.\n");
+        //printf("\nTamanhos incorretos para determinante.\n");
         return NAN;
     }
     Matrix* copy = zero_Matrix(mtx->rows,mtx->cols);
@@ -263,9 +263,9 @@ void delete_Matrix(Matrix* mtx) {
         //printf("\nDeletando valores correspondentes a linhas %d\n",i);
         free(((double**)mtx->data->data)[i]);
     }
-    printf("Deleta adt_base da matriz\n");
+    //printf("Deleta adt_base da matriz\n");
     remove_adt(mtx->data);
     free(mtx);
-    printf("Fim do delete matrix\n");
+    //printf("Fim do delete matrix\n");
 }
 

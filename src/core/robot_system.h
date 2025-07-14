@@ -92,6 +92,8 @@ typedef struct {
     Matrix* y_ref;
     Matrix* y_bot;
 
+    Matrix* raw_ref;
+
     double alpha_1, alpha_2;
 
     double current_time;
@@ -149,7 +151,7 @@ void robot_input_function(double t, double* u);
 
 void feedback_linearization(const double*x, const double* y_ref,double* u, double alpha_1,double alpha_2);
 void reference_model_x(double x_ref, double* y_bot_x);
-void reference_model_y(double t, double y_ref, double* y_bot_y);
+void reference_model_y(double y_ref, double* y_bot_y);
 void generate_reference(double t, double* x_ref, double* y_ref);
 
 double state_der_wrapper(double t, int index, double* x, double* u);
