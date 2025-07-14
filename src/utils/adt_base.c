@@ -17,13 +17,12 @@ abase* create_adt(void *data, size_t size){
     return new_adt;
 }
 
-void remove_adt(abase** node){
+void remove_adt(abase* node){
     //printf("Removing adt base Structs \n");
-    if(node && *node){
+    if(node){
         //printf("Main Data Deallocation\n");
-        free((*node)->data);
-        free(*node);
-        *node = NULL;
+        free(node->data);
+        free(node);
         //printf("Success Deallocation");
     }
     //printf("Remove done\n");

@@ -1,33 +1,45 @@
 #include "robot_system.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <pthread.h>
+#include <semaphore.h>
+#include <unistd.h>
+#include <math.h>
+#include <time.h>
+#include <string.h>
 
-void* (*task_functions[7])(void*arg) = {
+
+void* (*task_functions[8])(void*arg) = {
     simulation_task,
     feedback_task,
     control_task,
     ref_x_task,
     ref_y_task,
     ref_gen_task,
-    ui_task
+    sim_metrics_task,
+    cpu_load_task
 };
 
-
-void set_fifo_priority(pthread_t thread, int priority) {
-    struct sched_param param;
-    param.sched_priority = priority;
-    if (pthread_setschedparam(thread, SCHED_FIFO, &param) != 0) {
-        perror("Falha no sched fifo\n");
+void* cpu_load_task(void* arg) {
+    shared_data* data = (shared_data*)arg;
+    double load_level = data->load_level;
+    while (data->simulation_running) {
+        struct timespec start, end;
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        long duration_us = (long)(load_level * 10000); 
+        while (1) {
+            double x = 0.0;
+            for (int i = 0; i < 100000; i++) {
+                x += i; // op inutil/ usando cpu
+            }
+            clock_gettime(CLOCK_MONOTONIC, &end);
+            long elapsed_us = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_nsec - start.tv_nsec) / 1000;
+            if (elapsed_us >= duration_us) break;
+        }
+        usleep(10000 - duration_us);
     }
+    return NULL;
 }
-
-void set_cpu_affinity(pthread_t thread, int cpu) {
-    cpu_set_t cpuset;
-    CPU_ZERO(&cpuset);
-    CPU_SET(cpu, &cpuset);
-    if (pthread_setaffinity_np(thread, sizeof(cpu_set_t), &cpuset) != 0) {
-        perror("falha ao setar affinity\n");
-    }
-}
-
 
 void robot_state_equation(double t,double* x, double* u, double* dx) {
     if (!x || !u || !dx) return;
@@ -50,8 +62,6 @@ void calculate_output(const double* x, double* y) {
 
 void robot_input_function(double t, double* u) {
     if (!u) return;
-
-
     
     if (t < 0) {
         u[INPUT_V] = 0.0;
@@ -66,19 +76,19 @@ void robot_input_function(double t, double* u) {
 }
 
 void feedback_linearization(const double* x, const double* y_ref, double* u, double alpha_1, double alpha_2){
-	if(!x || ! y_ref || !u )return;
-	double half_D = ROBOT_RADIUS;
-	double theta = x[THETA_ORI];
-	double xf = x[X_POS] + half_D * cos(theta);
-	double yf = x[Y_POS] + half_D * sin(theta);
-	double e_x = y_ref[X_POS] - xf;
-	double e_y = y_ref[Y_POS] - yf;
-	u[INPUT_V] = alpha_1 * (e_x * cos(theta) + e_y * sin(theta));
-	u[INPUT_OMEGA] = alpha_2 * (-e_x * sin(theta) + e_y * cos(theta)) / half_D;
+    if(!x || ! y_ref || !u )return;
+    double half_D = ROBOT_RADIUS;
+    double theta = x[THETA_ORI];
+    double xf = x[X_POS] + half_D * cos(theta);
+    double yf = x[Y_POS] + half_D * sin(theta);
+    double e_x = y_ref[X_POS] - xf;
+    double e_y = y_ref[Y_POS] - yf;
+    u[INPUT_V] = alpha_1 * (e_x * cos(theta) + e_y * sin(theta));
+    u[INPUT_OMEGA] = alpha_2 * (-e_x * sin(theta) + e_y * cos(theta)) / half_D;
 }
 
 void reference_model_x(double x_ref, double* x_bot_x){
-	*x_bot_x = x_ref;
+    *x_bot_x = x_ref;
 }
 
 void reference_model_y(double t,double y_ref, double* y_bot_y){
@@ -90,21 +100,19 @@ void reference_model_y(double t,double y_ref, double* y_bot_y){
 }
 
 void generate_reference(double t, double* x_ref, double* y_ref){
-	*x_ref = (5.0/M_PI)*cos(0.2 * M_PI * t);
-	if(t > 0  && t < 10.0) {
-		*y_ref = (5.0/M_PI)* sin(0.2 * M_PI * t);
-	}else {
-		*y_ref = -((5.0/M_PI) * sin(0.2 * M_PI *t));
-	}
+    *x_ref = (5.0/M_PI)*cos(0.2 * M_PI * t);
+    if(t > 0  && t < 10.0) {
+        *y_ref = (5.0/M_PI)* sin(0.2 * M_PI * t);
+    }else {
+        *y_ref = -((5.0/M_PI) * sin(0.2 * M_PI *t));
+    }
 }
 
 double state_der_wrapper(double t, int index, double* x , double* u) {
-	double dx[ROBOT_NUM_STATES];
-	robot_state_equation(t,x,u,dx);
-	return dx[index];
+    double dx[ROBOT_NUM_STATES];
+    robot_state_equation(t,x,u,dx);
+    return dx[index];
 }
-
-
 
 shared_data* create_shared_data(const char* filename) {
     shared_data* data = malloc(sizeof(shared_data));
@@ -127,18 +135,7 @@ shared_data* create_shared_data(const char* filename) {
         return NULL;
     }
 
-    pthread_mutexattr_t mutex_attr;
-    pthread_mutexattr_init(&mutex_attr);
-    pthread_mutexattr_setprotocol(&mutex_attr, PTHREAD_PRIO_INHERIT);
-    pthread_mutex_init(&data->data_mutex, &mutex_attr);
-    pthread_mutexattr_destroy(&mutex_attr);
-
-
-    sem_init(&data->new_input_available, 0, 0);
-    sem_init(&data->output_calculated, 0, 0);
-    sem_init(&data->ref_updated, 0, 0);
-    sem_init(&data->y_bot_updated, 0, 0);
-
+    pthread_mutex_init(&data->data_mutex, NULL);
     
     data->filename = newADTS_str((char*)filename);
     if (!data->filename) {
@@ -146,14 +143,14 @@ shared_data* create_shared_data(const char* filename) {
         return NULL;
     }
     
-    data->output_file = fopen(data->filename, "w");
+    data->output_file = fopen($(data->filename), "w");
     if (!data->output_file) {
         destroy_shared_data(data);
         return NULL;
     }
-    fprintf(data->output_file, "# t\tx_ref\ty_ref\ty_bot_x\ty_bot_y\txf\tyf\ttheta\n"); 
+    fprintf(data->output_file, "t,x_ref,y_ref,y_bot_x,y_bot_y,xf,yf,theta\n"); 
     
-    if (sem_init(&data->new_input_available, 0, 0) != 0 ||  // inicializa os semaforos de nova entrada e e calculo finalizado
+    if (sem_init(&data->new_input_available, 0, 0) != 0 ||
         sem_init(&data->output_calculated, 0, 0) != 0 ||
         sem_init(&data->ref_updated, 0, 0) != 0 ||
         sem_init(&data->y_bot_updated, 0, 0) != 0 ){
@@ -161,36 +158,42 @@ shared_data* create_shared_data(const char* filename) {
             destroy_shared_data(data);
             return NULL;
     }
-    data->feedback_times = 0;
+    
     data->current_time = SIM_START_TIME;
     data->simulation_running = 1;
     data->simulation_cycles = 0;
     data->sampling_cycles = 0;
     data->feedback_cycles = 0;
 
-    
     data->alpha_1 = ALPHAS_O;
     data->alpha_2 = ALPHAS_O;
-    
 
     data->control_cycles = 0;
     data->ref_x_cycles = 0;
     data->ref_y_cycles = 0;
     data->ref_gen_cycles = 0;
-    data->ui_cycles = 0;
-    data->max_samples = (long) (SIM_END_TIME / SIMULATION_DT) +1;
+    data->sim_metrics_cycles = 0;
+    data->max_samples = (long) ((SIM_END_TIME - SIM_START_TIME) / SIMULATION_DT) + 1;
     data->sim_times = calloc(data->max_samples, sizeof(double));
     data->feedback_times = calloc(data->max_samples, sizeof(double));
-
     data->control_times = calloc(data->max_samples, sizeof(double));
     data->ref_x_times = calloc(data->max_samples, sizeof(double));
     data->ref_y_times = calloc(data->max_samples, sizeof(double));
     data->ref_gen_times = calloc(data->max_samples, sizeof(double));
-    data->ui_times = calloc(data->max_samples, sizeof(double));
+    data->sim_metrics_times = calloc(data->max_samples, sizeof(double));
+    data->load_level = 0.0;
 
     SET_MDATA(data,state_matrix, X_POS, 0.0);
     SET_MDATA(data,state_matrix, Y_POS, 0.0);
     SET_MDATA(data,state_matrix, THETA_ORI, 0.0);
+    
+    SET_MDATA(data,input_matrix, INPUT_V, 0.0);
+    SET_MDATA(data,input_matrix, INPUT_OMEGA, 0.0);
+    
+    SET_MDATA(data,y_ref, X_POS, 0.0);
+    SET_MDATA(data,y_ref, Y_POS, 0.0);
+    SET_MDATA(data,y_bot, X_POS, 0.0);
+    SET_MDATA(data,y_bot, Y_POS, 0.0);
     
     return data;
 }
@@ -214,15 +217,18 @@ void destroy_shared_data(shared_data* data) {
     sem_destroy(&data->output_calculated);
     sem_destroy(&data->ref_updated);
     sem_destroy(&data->y_bot_updated);
-    free(data->sim_times);
-    free(data->feedback_times);
-    free(data->control_times);
-    free(data->ref_x_times);
-    free(data->ref_y_times);
-    free(data->ref_gen_times);
-    free(data->ui_times);
+    
+    if (data->sim_times) free(data->sim_times);
+    if (data->feedback_times) free(data->feedback_times);
+    if (data->control_times) free(data->control_times);
+    if (data->ref_x_times) free(data->ref_x_times);
+    if (data->ref_y_times) free(data->ref_y_times);
+    if (data->ref_gen_times) free(data->ref_gen_times);
+    if (data->sim_metrics_times) free(data->sim_metrics_times);
+    printf("Dando free\n");
     
     free(data);
+    printf("sucess\n");
 }
 
 void sleep_ms(long milliseconds) {
@@ -238,7 +244,7 @@ long get_current_time_ms(void) {
 void* simulation_task(void* arg) {
     simulation_activity* sim = (simulation_activity*)arg;
     shared_data* data = sim->shared;
-    printf("Começo da simulacoa\n");
+    printf("Começo da simulacao\n");
     
     double u[ROBOT_NUM_INPUTS];
     double x[ROBOT_NUM_STATES];
@@ -249,7 +255,7 @@ void* simulation_task(void* arg) {
     long start_time_ms = get_current_time_ms();
     long next_execution = start_time_ms;
     
-    while (data->simulation_running) {
+    while (data->simulation_running && data->current_time <= SIM_END_TIME) {
         long task_start = get_current_time_ms();
         next_execution += SIMULATION_PERIOD_MS;
         long current_time = get_current_time_ms();
@@ -259,12 +265,10 @@ void* simulation_task(void* arg) {
 
         sem_wait(&data->new_input_available);
         
-        if (!(data->simulation_running)){
-            printf("Simulacao parou 1\n");
+        if (!data->simulation_running || data->current_time > SIM_END_TIME){
             break;
         }
 
-        // Somente leitura de ut para calculo
         pthread_mutex_lock(&data->data_mutex);
         u[INPUT_V] = MDATA(data,input_matrix, INPUT_V);
         u[INPUT_OMEGA] = MDATA(data,input_matrix, INPUT_OMEGA);
@@ -278,9 +282,6 @@ void* simulation_task(void* arg) {
             x[i] += simpson((fun)state_der_wrapper, t, t + dt, 4,i,x,u);
         }
 
-
-
-
         pthread_mutex_lock(&data->data_mutex);
         SET_MDATA(data,state_matrix, X_POS, x[X_POS]);
         SET_MDATA(data,state_matrix, Y_POS,x[Y_POS]);
@@ -291,23 +292,36 @@ void* simulation_task(void* arg) {
         SET_MDATA(data,output_matrix, X_POS,y[X_POS]);
         SET_MDATA(data,output_matrix, Y_POS,y[Y_POS]);
         SET_MDATA(data,output_matrix, THETA_ORI,y[THETA_ORI]);
+        
+        data->current_time += dt;
         pthread_mutex_unlock(&data->data_mutex);
         
-        // Sinalize sem de saida
         sem_post(&data->output_calculated);
     
-        data->sim_times[data->simulation_cycles] = (get_current_time_ms() - task_start) / 1000.0;
+        if (data->simulation_cycles < data->max_samples) {
+            data->sim_times[data->simulation_cycles] = (get_current_time_ms() - task_start) / 1000.0;
+        }
         data->simulation_cycles++;
     }
     
-    printf("Simulacao acabopu cpm %ld ciclos\n", data->simulation_cycles);
+    pthread_mutex_lock(&data->data_mutex);
+    data->simulation_running = 0;
+    pthread_mutex_unlock(&data->data_mutex);
+    
+    sem_post(&data->new_input_available);
+    sem_post(&data->output_calculated);
+    sem_post(&data->ref_updated);
+    sem_post(&data->ref_updated);
+    sem_post(&data->y_bot_updated);
+    sem_post(&data->y_bot_updated);
+    
+    printf("Simulacao acabou com %ld ciclos\n", data->simulation_cycles);
     return NULL;
 }
 
-
 void* feedback_task(void* arg) {
     shared_data* data = (shared_data*)arg;
-    double x[ROBOT_NUM_STATES], y[ROBOT_NUM_OUTPUTS], u[ROBOT_NUM_INPUTS];
+    double x[ROBOT_NUM_STATES], y_ref[ROBOT_NUM_OUTPUTS], u[ROBOT_NUM_INPUTS];
     long start_time_ms = get_current_time_ms();
     long next_execution = start_time_ms;
 
@@ -326,12 +340,11 @@ void* feedback_task(void* arg) {
         x[X_POS] = MDATA(data, state_matrix, X_POS);
         x[Y_POS] = MDATA(data, state_matrix, Y_POS);
         x[THETA_ORI] = MDATA(data, state_matrix, THETA_ORI);
-        y[X_POS] = MDATA(data, output_matrix, X_POS);
-        y[Y_POS] = MDATA(data, output_matrix, Y_POS);
-        y[THETA_ORI] = MDATA(data, output_matrix, THETA_ORI);
+        y_ref[X_POS] = MDATA(data, y_ref, X_POS);
+        y_ref[Y_POS] = MDATA(data, y_ref, Y_POS);
         pthread_mutex_unlock(&data->data_mutex);
 
-        feedback_linearization(x, y, u,data->alpha_1,data->alpha_2);
+        feedback_linearization(x, y_ref, u,data->alpha_1,data->alpha_2);
 
         pthread_mutex_lock(&data->data_mutex);
         SET_MDATA(data, input_matrix, INPUT_V, u[INPUT_V]);
@@ -339,12 +352,16 @@ void* feedback_task(void* arg) {
         pthread_mutex_unlock(&data->data_mutex);
 
         sem_post(&data->new_input_available);
-        data->feedback_times[data->feedback_cycles] = (get_current_time_ms() - task_start) / 1000.0;
+        
+        if (data->feedback_cycles < data->max_samples) {
+            data->feedback_times[data->feedback_cycles] = (get_current_time_ms() - task_start) / 1000.0;
+        }
         data->feedback_cycles++;
     }
+    
+    sem_post(&data->new_input_available);
     return NULL;
 }
-
 
 void* control_task(void* arg) {
     shared_data* data = (shared_data*)arg;
@@ -360,6 +377,7 @@ void* control_task(void* arg) {
         }
 
         sem_wait(&data->ref_updated);
+        sem_wait(&data->ref_updated);
         if (!data->simulation_running) break;
 
         pthread_mutex_lock(&data->data_mutex);
@@ -368,9 +386,14 @@ void* control_task(void* arg) {
         pthread_mutex_unlock(&data->data_mutex);
 
         sem_post(&data->output_calculated);
-        data->control_times[data->control_cycles] = (get_current_time_ms() - task_start) / 1000.0;
+        
+        if (data->control_cycles < data->max_samples) {
+            data->control_times[data->control_cycles] = (get_current_time_ms() - task_start) / 1000.0;
+        }
         data->control_cycles++;
     }
+    
+    sem_post(&data->output_calculated);
     return NULL;
 }
 
@@ -399,9 +422,14 @@ void* ref_x_task(void* arg) {
         pthread_mutex_unlock(&data->data_mutex);
 
         sem_post(&data->ref_updated);
-        data->ref_x_times[data->ref_x_cycles] = (get_current_time_ms() - task_start) / 1000.0;
+        
+        if (data->ref_x_cycles < data->max_samples) {
+            data->ref_x_times[data->ref_x_cycles] = (get_current_time_ms() - task_start) / 1000.0;
+        }
         data->ref_x_cycles++;
     }
+    
+    sem_post(&data->ref_updated);
     return NULL;
 }
 
@@ -430,9 +458,14 @@ void* ref_y_task(void* arg) {
         pthread_mutex_unlock(&data->data_mutex);
 
         sem_post(&data->ref_updated);
-        data->ref_y_times[data->ref_y_cycles] = (get_current_time_ms() - task_start) / 1000.0;
+        
+        if (data->ref_y_cycles < data->max_samples) {
+            data->ref_y_times[data->ref_y_cycles] = (get_current_time_ms() - task_start) / 1000.0;
+        }
         data->ref_y_cycles++;
     }
+    
+    sem_post(&data->ref_updated);
     return NULL;
 }
 
@@ -440,6 +473,11 @@ void* ref_gen_task(void* arg) {
     shared_data* data = (shared_data*)arg;
     long start_time_ms = get_current_time_ms();
     long next_execution = start_time_ms;
+    
+    sem_post(&data->y_bot_updated);
+    sem_post(&data->y_bot_updated);
+    sem_post(&data->output_calculated);
+    sem_post(&data->new_input_available);
 
     while (data->simulation_running) {
         long task_start = get_current_time_ms();
@@ -450,6 +488,10 @@ void* ref_gen_task(void* arg) {
         }
 
         pthread_mutex_lock(&data->data_mutex);
+        if (!data->simulation_running) {
+            pthread_mutex_unlock(&data->data_mutex);
+            break;
+        }
         double t = data->current_time;
         double x_ref, y_ref;
         generate_reference(t, &x_ref, &y_ref);
@@ -458,58 +500,72 @@ void* ref_gen_task(void* arg) {
         pthread_mutex_unlock(&data->data_mutex);
 
         sem_post(&data->y_bot_updated);
-        data->ref_gen_times[data->ref_gen_cycles] = (get_current_time_ms() - task_start) / 1000.0;
+        sem_post(&data->y_bot_updated);
+        if (data->ref_gen_cycles < data->max_samples) {
+            data->ref_gen_times[data->ref_gen_cycles] = (get_current_time_ms() - task_start) / 1000.0;
+        }
         data->ref_gen_cycles++;
     }
+    
+    sem_post(&data->y_bot_updated);
+    sem_post(&data->y_bot_updated);
     return NULL;
 }
 
-void* ui_task(void* arg) {
+void* sim_metrics_task(void* arg) {
     shared_data* data = (shared_data*)arg;
-    char buffer[1024];
+    char buffer[3000];
     int buffer_pos = 0;
     long start_time_ms = get_current_time_ms();
     long next_execution = start_time_ms;
 
     while (data->simulation_running) {
         long task_start = get_current_time_ms();
-        next_execution += UI_PERIOD_MS;
+        next_execution += SIM_MET_PERIOD_MS;
         long current_time = get_current_time_ms();
         if (next_execution > current_time) {
             sleep_ms(next_execution - current_time);
         }
 
         pthread_mutex_lock(&data->data_mutex);
+        if (!data->simulation_running) {
+            pthread_mutex_unlock(&data->data_mutex);
+            break;
+        }
         buffer_pos += snprintf(buffer + buffer_pos, sizeof(buffer) - buffer_pos,
-                               "%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f\n",
+                               "%.7f,%.7f,%.7f,%.7f,%.7f,%.7f,%.7f,%.7f\n",
                                data->current_time,
                                MDATA(data, y_ref, X_POS), MDATA(data, y_ref, Y_POS),
                                MDATA(data, y_bot, X_POS), MDATA(data, y_bot, Y_POS),
-                               MDATA(data, output_matrix, X_POS), MDATA(data, output_matrix, Y_POS));
-        if (buffer_pos > 900) {
+                               MDATA(data, output_matrix, X_POS), MDATA(data, output_matrix, Y_POS),
+                               MDATA(data, output_matrix, THETA_ORI));
+        pthread_mutex_unlock(&data->data_mutex);
+        
+        if (buffer_pos > 2000) {
             fwrite(buffer, 1, buffer_pos, data->output_file);
             fflush(data->output_file);
             buffer_pos = 0;
         }
-        pthread_mutex_unlock(&data->data_mutex);
 
-        data->ui_times[data->ui_cycles] = (get_current_time_ms() - task_start) / 1000.0;
-        data->ui_cycles++;
+        if (data->sim_metrics_cycles < data->max_samples) {
+            data->sim_metrics_times[data->sim_metrics_cycles] = (get_current_time_ms() - task_start) / 1000.0;
+        }
+        data->sim_metrics_cycles++;
     }
 
-    pthread_mutex_lock(&data->data_mutex);
-    fwrite(buffer, 1, buffer_pos, data->output_file);
-    fflush(data->output_file);
-    pthread_mutex_unlock(&data->data_mutex);
+    if (buffer_pos > 0) {
+        fwrite(buffer, 1, buffer_pos, data->output_file);
+        fflush(data->output_file);
+    }
     return NULL;
 }
 
-void log_performance_metrics(shared_data* data) {
-    FILE* file = fopen("data/performance_metrics.txt", "w");
-    if (!file) {
-        perror("Failed to open performance_metrics.txt");
-        return;
-    }
+void log_performance_metrics(shared_data* data, const char* str_load) {
+    FILE* file = fopen("performance_metrics.txt", "a");
+
+    fprintf(file, "%s\n", str_load);
+    fprintf(file, "Thread  ###  Media(s)  ###  Desvio(s)  ###  Max(s)  ###  Min(s)  ###  Jitter(s)  ###  Misses\n");
+    fprintf(file, "---------------------------------------------------------------------------\n");
 
     thread_metrics metrics[NUM_THREADS] = {0};
     double* times[] = {
@@ -519,7 +575,7 @@ void log_performance_metrics(shared_data* data) {
         data->ref_x_times,
         data->ref_y_times,
         data->ref_gen_times,
-        data->ui_times
+        data->sim_metrics_times
     };
     long cycles[] = {
         data->simulation_cycles,
@@ -528,22 +584,18 @@ void log_performance_metrics(shared_data* data) {
         data->ref_x_cycles,
         data->ref_y_cycles,
         data->ref_gen_cycles,
-        data->ui_cycles
+        data->sim_metrics_cycles
     };
     double periods[] = {
-        SIMULATION_PERIOD_MS, 
-        FEEDBACK_PERIOD_MS,
-        CONTROL_PERIOD_MS,
-        REF_X_PERIOD_MS,
-        REF_Y_PERIOD_MS, 
-        REF_GEN_PERIOD_MS,
-        UI_PERIOD_MS
+        SIMULATION_PERIOD_MS / 1000.0, 
+        FEEDBACK_PERIOD_MS / 1000.0,
+        CONTROL_PERIOD_MS / 1000.0,
+        REF_X_PERIOD_MS / 1000.0,
+        REF_Y_PERIOD_MS / 1000.0, 
+        REF_GEN_PERIOD_MS / 1000.0,
+        SIM_MET_PERIOD_MS / 1000.0
     };
 
-    for(int i = 0; i < sizeof(periods)/sizeof(double); i++){
-        periods[i] /= 1000.0;
-
-    }
     const char* thread_names[] = {
         "Simulation",
         "Feedback",
@@ -551,38 +603,36 @@ void log_performance_metrics(shared_data* data) {
         "Ref_X",
         "Ref_Y",
         "Ref_Gen",
-        "UI"
+        "Simulation_Metrics"
     };
 
-    for (int i = 0; i < NUM_THREADS; i++) {
+    for (int i = 0; i < NUM_THREADS -1; i++) {
         if (cycles[i] == 0) continue;
-        double sum = 0, sum_sq_dif = 0;
-        for (long j = 0; j < cycles[i]; j++) {
-            metrics[i].min = times[i][0];
-            metrics[i].mean += times[i][j];
-            for (long j = 0; j < cycles[i]; j++) {
+        long effective_cycles = (cycles[i] > data->max_samples ? data->max_samples : cycles[i]);
+        
+        metrics[i].min = times[i][0];
+        metrics[i].max = times[i][0];
+        double sum = 0;
+        
+        for (long j = 0; j < effective_cycles; j++) {
             double t = times[i][j];
-                sum += t;
-                if (t > metrics[i].max) metrics[i].max = t;
-                if (t < metrics[i].min) metrics[i].min = t;
-                if (t > periods[i]) metrics[i].misses++;
-            }
-            metrics[i].mean = sum / cycles[i];
-            for (long j = 0; j < cycles[i]; j++) {
-                double diff = times[i][j] - metrics[i].mean;
-                sum_sq_dif += diff * diff;
+            sum += t;
+            if (t > metrics[i].max) metrics[i].max = t;
+            if (t < metrics[i].min) metrics[i].min = t;
+            if (t > periods[i]) metrics[i].misses++;
         }
-        metrics[i].variance = sum_sq_dif / cycles[i];
+        metrics[i].mean = sum / effective_cycles;
+        
+        double sum_sq_diff = 0;
+        for (long j = 0; j < effective_cycles; j++) {
+            double diff = times[i][j] - metrics[i].mean;
+            sum_sq_diff += diff * diff;
+        }
+        metrics[i].variance = sum_sq_diff / effective_cycles;
         metrics[i].std_dev = sqrt(metrics[i].variance);
         metrics[i].jitter = metrics[i].max - metrics[i].min;
-        }
-        metrics[i].mean /= cycles[i];
-    }
-
-    fprintf(file, "%-7s %-7s %-7s %-7s %-7s %-7s %-7s\n", "Thread", "Media (s)", "Desvio (s)","Max (s)","Min (s)","Jitter(s)", "Misses");
-    fprintf(file, "------------------------------------------------------------\n");
-    for (int i = 0; i < NUM_THREADS; i++) {
-        fprintf(file, "%-7s %-7s %-7s %-7s %-7s %-7s %-7s\n",
+        
+        fprintf(file, "%-10s %-10.7f %-10.7f %-10.7f %-10.7f %-10.7f %-7ld\n",
                 thread_names[i],
                 metrics[i].mean,
                 metrics[i].std_dev,
@@ -595,126 +645,46 @@ void log_performance_metrics(shared_data* data) {
     fclose(file);
 }
 
-void* input_sampling_task(void* arg) {
-    simulation_activity* sim = (simulation_activity*)arg;
-    shared_data* data = sim->shared;
-
+int run_multitask_simulation(shared_data* data,const char* output_filename,int sim_loaded) {   
+    simulation_activity sim = {data, SIM_START_TIME, SIM_END_TIME};
     
-    double t = sim->start_time;
-    double u[ROBOT_NUM_INPUTS];
-    double y[ROBOT_NUM_OUTPUTS];
-    double x[ROBOT_NUM_STATES];
-    
-    long start_time_ms = get_current_time_ms();
-    long next_execution = start_time_ms;
-    
-    while (t <= sim->end_time && data->simulation_running) {
-        // força espera do tempo
-        next_execution += SAMPLING_PERIOD_MS;
-        long current_time = get_current_time_ms();
-        if (next_execution > current_time) {
-            sleep_ms(next_execution - current_time);
-        }
-        
-        robot_input_function(t, u);
-        
-        // pega lock pra atualizar valores
-        pthread_mutex_lock(&data->data_mutex);
-        get_val(data->input_matrix, INPUT_V, 0) = u[INPUT_V];
-        get_val(data->input_matrix, INPUT_OMEGA, 0) = u[INPUT_OMEGA];
-        data->current_time = t;
-        pthread_mutex_unlock(&data->data_mutex);
-        
-        // Sinaliza nova entrada
-        if (data->sampling_cycles % 5 == 0) {
-            sem_post(&data->new_input_available);
-            
-            // espera saida calcular
-            sem_wait(&data->output_calculated);
-        }
-        
-        pthread_mutex_lock(&data->data_mutex);
-        
-        y[X_POS] = get_val(data->output_matrix, X_POS, 0);
-        y[Y_POS] = get_val(data->output_matrix, Y_POS, 0);
-        y[THETA_ORI] = get_val(data->output_matrix, THETA_ORI, 0);
-        
-        pthread_mutex_unlock(&data->data_mutex);
-        
-        if (data->sampling_cycles % 1 == 0) {
-            fprintf(data->output_file, "%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\n",
-                    t,
-                    u[INPUT_V], u[INPUT_OMEGA],
-                    y[X_POS], y[Y_POS], y[THETA_ORI]);
-        }
-        printf("Ciclo finalizado %l . Valores registrados:  %.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\n",data->sampling_cycles,
-            t,
-            u[INPUT_V], u[INPUT_OMEGA],
-            y[X_POS], y[Y_POS], y[THETA_ORI]);
-        
-        t += SAMPLING_DT;
-        data->sampling_cycles++;
-    }
-    
-    pthread_mutex_lock(&data->data_mutex);
-    data->simulation_running = 0;
-    pthread_mutex_unlock(&data->data_mutex);
-    
-    sem_post(&data->new_input_available);
-    
-    printf("entradas acabaram em %ld ciclos\n", data->sampling_cycles);
-    return NULL;
-}
-
-int run_multitask_simulation(shared_data* data,const char* output_filename) {   
-    data->output_file = fopen(output_filename,"w");
-    if (!data->output_file) {
-        printf("falha na criação de dados\n");
-        return -1;
-    }
-    pthread_t tids[7] = {};
-    int prio_values[7] = {90,80,70,70,70,60,65};
-
-    
-
-    simulation_activity sim = {data};
-    
-
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED);
-    pthread_attr_setschedpolicy(&attr, SCHED_FIFO);
-
     int result;
-
-    for (int index = 0; index < 7;index++){
+    int num_threads = NUM_THREADS;
+    for (int index = 0; index < 7; index++){
         if(index == 0){
-            result = pthread_create(&tids[index], &attr, task_functions[index], &sim);
-            //set_fifo_priority(&tids[index], 1);
-            
-        }else{
-            result = pthread_create(&tids[index],&attr, task_functions[index], data);
-            //set_fifo_priority(&tids[index], 80);
+            result = pthread_create(&data->tids[index], NULL, task_functions[index], &sim);
+        } else {
+            result = pthread_create(&data->tids[index],NULL, task_functions[index], data);
         }
         if (result != 0) {
-            printf("Failed to cerated thread %d: %s\n",index,strerror(result));
+            printf("Falha na thread %d\n",index);
             continue;
         }
-
-        set_cpu_affinity(&tids[index], index % 4);
-    }
-    set_fifo_priority(&tids[index], prio_values[index]);
-    printf("começo threads\n");
-    for(int index = 0 ; index < 7; index++){
-        pthread_join(tids[index], NULL);
     }
 
+    if (sim_loaded) {
+        printf("Comeco sim com carga\n");
+        data->load_level = 0.5;
+        result = pthread_create(&data->tids[7], NULL, task_functions[7], data);
+        if (result != 0) printf("Falha na sim com carga\n");
+        else num_threads++;
+    }
     
-
-
-    log_performance_metrics(data);    
+    printf("Threads started\n");
+    
+    for(int index = 0 ; index < num_threads; index++){
+        if(sim_loaded && index == 7){
+            break;
+        } 
+        pthread_join(data->tids[index], NULL);
+        printf("Thread iniciada %d\n",index);
+    }
+    if(sim_loaded) pthread_join(data->tids[7], NULL);
+    const char* str_load= sim_loaded ? "Com Carga" : "Sem Carga:";
+    printf("Fazendo logs dos arquivos de %s\n",str_load);
+    log_performance_metrics(data, str_load);
+    printf("Destruindo data\n");
     destroy_shared_data(data);
     
     return 0;
 }
-

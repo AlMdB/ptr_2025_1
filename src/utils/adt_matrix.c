@@ -44,6 +44,8 @@ Matrix* create_Matrix(adt_string* input, unsigned int rows,unsigned int cols) {
         for (int col_j = 0; col_j < cols; col_j++) {
             if (token == NULL) {
                 printf("\nQuantidade insuficiente de dados para criar matriz\n");
+                for (int k = 0; k < row_i; k++) free(data[k]); 
+                free(data);
                 return NULL;
             }
             data[row_i][col_j] = atof(token);
@@ -52,6 +54,7 @@ Matrix* create_Matrix(adt_string* input, unsigned int rows,unsigned int cols) {
     }
 
     abase* newBase = create_adt(data, sizeof(double**) * rows);
+    free(data);
     
     Matrix* newMatrix = malloc(sizeof(Matrix));
     newMatrix->data = newBase;
@@ -74,6 +77,7 @@ Matrix* random_Matrix(int rows,int cols){
         }
     }
     abase* newBase = create_adt(data,sizeof(double**)*rows);
+    free(data);
     Matrix* new = malloc(sizeof(Matrix));
     new->data = newBase;
     new->rows = rows;
@@ -90,6 +94,7 @@ Matrix* zero_Matrix(unsigned int rows,unsigned int cols){
         }
     }
     abase* newBase = create_adt(data,sizeof(double**)*rows);
+    free(data);
     Matrix* new = malloc(sizeof(Matrix));
     new->data = newBase;
     new->rows = rows;
@@ -253,12 +258,14 @@ double determinant_Matrix(const Matrix* mtx) {
 
 void delete_Matrix(Matrix* mtx) {
     //printf("Deletando Matriz\n");
+    if(!mtx) return;
     for (int i = 0; i < mtx->rows; i++) {
         //printf("\nDeletando valores correspondentes a linhas %d\n",i);
         free(((double**)mtx->data->data)[i]);
     }
-    //printf("continua Deleta ponteiro de ponteiros\n");
-    free(((double**)mtx->data->data));
+    printf("Deleta adt_base da matriz\n");
     remove_adt(mtx->data);
+    free(mtx);
+    printf("Fim do delete matrix\n");
 }
 

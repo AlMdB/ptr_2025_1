@@ -14,7 +14,7 @@ typedef struct adt_base{
 }abase;
 
 abase* create_adt(void *data, size_t size);
-void remove_adt(abase** node);
+void remove_adt(abase* node);
 
 
 #endif

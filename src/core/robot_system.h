@@ -24,17 +24,20 @@ typedef struct {
     long misses;
 }thread_metrics;
 
-#define NUM_THREADS 7
+#define NUM_THREADS 8
 
 
 // nunca usados.r eferencia para o loop na criacao de threads
-#define SIM_METRIC 0
-#define FEEDBACK_METRIC 1
-#define CONTROL_METRIC 2
-#define REF_X_METRIC 3
-#define REF_Y_METRIC 4
-#define REF_GEN_METRIC 5
-#define UI_METRIC 6
+typedef enum {
+    SIM_METRIC = 0,
+    FEEDBACK_METRIC,
+    CONTROL_METRIC,
+    REF_X_METRIC,
+    REF_Y_METRIC,
+    REF_GEN_METRIC,
+    SIM_METS_METRIC,
+    LOAD_METRIC
+} MetricType;
 
 
 // Indices espaciais do robo(Pisicao x y centro de massa e orientacao no momento)
@@ -46,7 +49,6 @@ typedef struct {
 #define INPUT_V 0 
 #define INPUT_OMEGA 1
 
-// Dimensoes do sistema (Dado pelo lab2) como ***VETORES***
 #define ROBOT_NUM_STATES 3
 #define ROBOT_NUM_INPUTS 2 
 #define ROBOT_NUM_OUTPUTS 3
@@ -70,7 +72,7 @@ typedef struct {
 #define REF_Y_PERIOD_MS 50
 #define REF_GEN_PERIOD_MS 120
 
-#define UI_PERIOD_MS 100
+#define SIM_MET_PERIOD_MS 100
 
 #define ALPHAS_O 3.0
 
@@ -97,6 +99,8 @@ typedef struct {
 
     pthread_mutex_t data_mutex;
 
+    pthread_t tids[NUM_THREADS];
+
     sem_t new_input_available; 
     sem_t output_calculated;
     sem_t ref_updated;
@@ -114,7 +118,7 @@ typedef struct {
     long ref_x_cycles;
     long ref_y_cycles;
     long ref_gen_cycles;
-    long ui_cycles;
+    long sim_metrics_cycles;
 
     double* sim_times;
     double* feedback_times;
@@ -122,8 +126,11 @@ typedef struct {
     double* ref_x_times;
     double* ref_y_times;
     double* ref_gen_times;
-    double* ui_times;
+    double* sim_metrics_times;
     long max_samples;
+
+    double load_level;
+    int sim_with_load;
 } shared_data;
 
 typedef struct {
@@ -132,6 +139,8 @@ typedef struct {
     double end_time;
     int task_period_ms;
 } simulation_activity;
+
+
 
 
 void robot_state_equation(double t, double* x, double* u, double* dx);
@@ -152,18 +161,18 @@ void* control_task(void* arg);
 void* ref_x_task(void* arg);
 void* ref_y_task(void* arg);
 void* ref_gen_task(void* arg);
-void* ui_task(void* arg);
+void* sim_metrics_task(void* arg);
+void* cpu_load_task(void* arg);
 
-
-extern void* (*task_functions[7])(void*);
+extern void* (*task_functions[8])(void*);
 
 shared_data* create_shared_data(const char* filename);
 void destroy_shared_data(shared_data* data);
-int run_multitask_simulation(shared_data* data,const char* output_filename);
+int run_multitask_simulation(shared_data* data,const char* output_filename,int sim_loaded);
 
 void sleep_ms(long milliseconds);
 long get_current_time_ms(void);
 
-void log_performance_metrics(shared_data* data);
+void log_performance_metrics(shared_data* data_no_load,const char* str_load);
 
 #endif
